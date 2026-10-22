@@ -1,122 +1,56 @@
+
 from machine import Pin, ADC
-from neopixel import NeoPixel
+import dht
 import time
 
-# ==========================================
-# MQ-2 가스 센서 설정
-# ==========================================
-mq2 = ADC(Pin(26))       # GP26 = ADC0
+# 가스 센서
+gas_sensor = ADC(Pin(26))
 
+# DHT11 온습도 센서
+temp_sensor = dht.DHT11(Pin(17))
 
-# ==========================================
-# WS2813 네오픽셀 설정
-# ==========================================
-TIMING = (280, 515, 515, 745)
+# RGB LED (공통 음극형 기준)
+led_red = Pin(14, Pin.OUT)
+led_green = Pin(15, Pin.OUT)
+led_blue = Pin(16, Pin.OUT)
 
-LED_COUNT = 10           # 사용하는 LED 개수에 맞게 변경
-led = NeoPixel(Pin(16), LED_COUNT, timing=TIMING)
+def set_led(color):
+    led_red.value(1 if color == "red" else 0)
+    led_green.value(1 if color in ("green", "yellow") else 0)
+    led_blue.value(0)
 
-
-# ==========================================
-# 환기 기준값
-# 센서의 실제 환경에 맞게 조절
-# ==========================================
-GOOD_LIMIT = 9000       # 이보다 작으면 좋음
-CAUTION_LIMIT = 12000    # 이보다 작으면 주의
-                           # 30000 이상이면 환기 필요
-
-
-# ==========================================
-# LED 밝기 설정
-# ==========================================
-BRIGHTNESS = 0.4         # 40% 밝기
-
-
-# ==========================================
-# LED 색상 함수
-# ==========================================
-def set_led_color(r, g, b):
-    r = int(r * BRIGHTNESS)
-    g = int(g * BRIGHTNESS)
-    b = int(b * BRIGHTNESS)
-
-    for i in range(LED_COUNT):
-        led[i] = (r, g, b)
-
-    led.write()
-
-
-# ==========================================
-# LED 끄기
-# ==========================================
-def led_off():
-    for i in range(LED_COUNT):
-        led[i] = (0, 0, 0)
-
-    led.write()
-
-
-# ==========================================
-# 시작 시 LED 테스트
-# ==========================================
-set_led_color(0, 255, 0)
-time.sleep(1)
-
-set_led_color(255, 255, 0)
-time.sleep(1)
-
-set_led_color(255, 0, 0)
-time.sleep(1)
-
-led_off()
-
-
-# ==========================================
-# 메인 프로그램
-# ==========================================
-danger_blink = False
+CAUTION_LEVEL = 18000
+DANGER_LEVEL = 30000
 
 while True:
+    try:
+        # 가스 센서 측정
+        gas_value = gas_sensor.read_u16()
 
-    # MQ-2 센서값 읽기
-    sensor_value = mq2.read_u16()
+        # 온도와 습도 측정
+        temp_sensor.measure()
+        temperature = temp_sensor.temperature()
+        humidity = temp_sensor.humidity()
 
-    print("MQ-2 센서값:", sensor_value)
+        # 가스 센서값에 따라 LED 색상 결정
+        if gas_value >= DANGER_LEVEL:
+            status = "환기 권장"
+            set_led("red")
+        elif gas_value >= CAUTION_LEVEL:
+            status = "상태 확인"
+            set_led("yellow")
+        else:
+            status = "측정값 양호"
+            set_led("green")
 
+        # 결과 출력
+        print("가스 센서값:", gas_value)
+        print("온도:", temperature, "°C")
+        print("습도:", humidity, "%")
+        print("상태:", status)
+        print("----------------------")
 
-    # --------------------------------------
-    # 1. 좋음
-    # --------------------------------------
-    if sensor_value < GOOD_LIMIT:
+    except OSError as e:
+        print("센서 읽기 오류:", e)
 
-        set_led_color(0, 255, 0)
-
-        danger_blink = False
-
-
-    # --------------------------------------
-    # 2. 주의
-    # --------------------------------------
-    elif sensor_value < CAUTION_LIMIT:
-
-        set_led_color(255, 180, 0)
-
-        danger_blink = False
-
-
-    # --------------------------------------
-    # 3. 환기 필요
-    # --------------------------------------
-    else:
-
-        # 빨간색으로 깜빡이기
-        set_led_color(255, 0, 0)
-        time.sleep(0.5)
-
-        led_off()
-        time.sleep(0.5)
-
-
-    # 1초마다 측정
-    time.sleep(1)
-
+    time.sleep(2)
