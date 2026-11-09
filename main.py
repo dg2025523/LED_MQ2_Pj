@@ -1,165 +1,169 @@
 
 from machine import Pin, ADC
+from neopixel import NeoPixel
 import dht
 import time
 
 # =====================================
-# 교실 환기 타이밍 알리미
+# 교실 환기 타이밍 알리미 - 최종 버전
 # Raspberry Pi Pico 2 W / MicroPython
 # =====================================
 
-# 1. 센서 핀 설정
-gas_sensor = ADC(Pin(26))
-dht_sensor = dht.DHT11(Pin(17))
+# 1. WS2813 RGB LED 설정
+TIMING = (280, 515, 515, 745)
+LED_PIN = 16
+LED_COUNT = 10
 
-# 2. RGB LED 핀 설정
-red = Pin(13, Pin.OUT)
-green = Pin(14, Pin.OUT)
-blue = Pin(15, Pin.OUT)
+led = NeoPixel(
+    Pin(LED_PIN),
+    LED_COUNT,
+    timing=TIMING
+)
 
-# 공통 캐소드: False
-# 공통 애노드: True
-COMMON_ANODE = False
+# 2. MQ-2 가스 센서 (A0)
+mq2 = ADC(Pin(26))
 
-# 3. 시연용 임계값
+# 3. DHT11 온습도 센서 (SPI0 CS)
+sensor = dht.DHT11(Pin(5))
+
+# 4. LED 색상 및 밝기
+GREEN = (0, 60, 0)
+YELLOW = (60, 45, 0)
+RED = (60, 0, 0)
+OFF = (0, 0, 0)
+
+# 5. 시연용 임계값
 GAS_GREEN_MAX = 7000
 GAS_YELLOW_MAX = 8500
 
-TEMP_NORMAL_MIN = 18
-TEMP_NORMAL_MAX = 28
-TEMP_DANGER_MIN = 16
-TEMP_DANGER_MAX = 32
+TEMP_YELLOW = 28
+TEMP_RED = 32
 
-HUM_NORMAL_MIN = 30
-HUM_NORMAL_MAX = 70
-HUM_DANGER_MIN = 20
-HUM_DANGER_MAX = 80
+HUM_YELLOW = 70
+HUM_RED = 85
 
-# 4. LED 제어 함수
-def set_led(r, g, b):
-    if COMMON_ANODE:
-        red.value(1 - r)
-        green.value(1 - g)
-        blue.value(1 - b)
-    else:
-        red.value(r)
-        green.value(g)
-        blue.value(b)
+# 측정 간격 (초)
+INTERVAL = 2
 
-def led_green():
-    set_led(0, 1, 0)
 
-def led_yellow():
-    set_led(1, 1, 0)
+# =====================================
+# LED 제어 함수
+# =====================================
 
-def led_red():
-    set_led(1, 0, 0)
+def fill(color):
+    for i in range(LED_COUNT):
+        led[i] = color
+    led.write()
 
-def led_off():
-    set_led(0, 0, 0)
 
-# 5. 가스 상태 판단
-def check_gas(value):
-    if value <= GAS_GREEN_MAX:
+# =====================================
+# 가스 상태 판정
+# =====================================
+
+def gas_level(gas):
+    if gas <= GAS_GREEN_MAX:
         return 0
-    elif value <= GAS_YELLOW_MAX:
+    elif gas <= GAS_YELLOW_MAX:
         return 1
     else:
         return 2
 
-# 6. 온도 상태 판단
-def check_temperature(temp):
-    if temp < TEMP_DANGER_MIN or temp > TEMP_DANGER_MAX:
+
+# =====================================
+# 온도 상태 판정
+# =====================================
+
+def temp_level(temp):
+    if temp >= TEMP_RED:
         return 2
-    elif temp < TEMP_NORMAL_MIN or temp > TEMP_NORMAL_MAX:
+    elif temp >= TEMP_YELLOW:
         return 1
     else:
         return 0
 
-# 7. 습도 상태 판단
-def check_humidity(hum):
-    if hum < HUM_DANGER_MIN or hum > HUM_DANGER_MAX:
+
+# =====================================
+# 습도 상태 판정
+# =====================================
+
+def hum_level(hum):
+    if hum >= HUM_RED:
         return 2
-    elif hum < HUM_NORMAL_MIN or hum > HUM_NORMAL_MAX:
+    elif hum >= HUM_YELLOW:
         return 1
     else:
         return 0
 
-# 8. 메인 프로그램
-print("교실 환기 타이밍 알리미 시작!")
-print("MQ-2 센서 예열 및 안정화 중...")
 
-led_off()
-time.sleep(20)
+# =====================================
+# 메인 프로그램
+# =====================================
 
-last_temp = None
-last_hum = None
+fill(OFF)
 
-while True:
-    try:
-        # 가스 센서 값 읽기
-        gas_value = gas_sensor.read_u16()
+print("============================")
+print("교실 환기 타이밍 알리미 시작")
+print("============================")
 
-        # DHT11 온습도 읽기
+try:
+    while True:
+
+        # 1. 가스 센서 측정
+        gas = mq2.read_u16()
+        level = gas_level(gas)
+
+        # 2. 온습도 센서 측정
         try:
-            dht_sensor.measure()
-            last_temp = dht_sensor.temperature()
-            last_hum = dht_sensor.humidity()
-        except OSError:
-            print("DHT11 측정 오류 - 재시도 예정")
+            sensor.measure()
 
-        # 가스 상태
-        gas_level = check_gas(gas_value)
+            temp = sensor.temperature()
+            hum = sensor.humidity()
 
-        # 온습도 상태
-        if last_temp is not None and last_hum is not None:
-            temp_level = check_temperature(last_temp)
-            hum_level = check_humidity(last_hum)
-
-            # 가장 높은 위험 단계 선택
-            final_level = max(
-                gas_level,
-                temp_level,
-                hum_level
+            # 세 센서 중 가장 높은 경고 단계
+            level = max(
+                level,
+                temp_level(temp),
+                hum_level(hum)
             )
+
+            dht_status = "정상"
+
+        except OSError as e:
+            temp = None
+            hum = None
+            dht_status = "측정 오류: {}".format(e)
+
+            # 오류 시 가스값만으로 LED 결정
+
+        # 3. LED 색상 결정
+        if level == 0:
+            fill(GREEN)
+            status = "초록색 - 정상"
+
+        elif level == 1:
+            fill(YELLOW)
+            status = "노란색 - 환기 권장"
+
         else:
-            # 온습도 데이터가 없으면 안전상 주의 표시
-            final_level = max(gas_level, 1)
+            fill(RED)
+            status = "빨간색 - 환기 알림"
 
-        # LED 색상 결정
-        if final_level == 0:
-            led_green()
-            status = "정상 - 환기 상태 양호"
-
-        elif final_level == 1:
-            led_yellow()
-            status = "주의 - 환기 권장"
-
-        else:
-            led_red()
-            status = "위험 - 환기 필요"
-
-        # Thonny Shell 출력
+        # 4. Thonny Shell 출력
         print("----------------------------")
-        print("가스 ADC 값:", gas_value)
+        print("가스값:", gas)
 
-        if last_temp is not None:
-            print("온도:", last_temp, "도")
-            print("습도:", last_hum, "%")
+        if temp is not None:
+            print("온도:", temp, "C")
+            print("습도:", hum, "%")
         else:
-            print("온습도 측정 대기 중")
+            print("온습도 측정 실패")
 
-        print("상태:", status)
+        print("DHT11:", dht_status)
+        print("LED 상태:", status)
+        print("----------------------------")
 
-        # 3초마다 측정
-        time.sleep(3)
+        time.sleep(INTERVAL)
 
-    except KeyboardInterrupt:
-        led_off()
-        print("프로그램 종료")
-        break
-
-    except Exception as e:
-        led_off()
-        print("오류 발생:", e)
-        time.sleep(3)
+except KeyboardInterrupt:
+    fill(OFF)
+    print("프로그램 종료")
